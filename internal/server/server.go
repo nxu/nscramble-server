@@ -1,4 +1,4 @@
-// Package server is the HTTP API: GET /health and POST /sync (see README for the protocol).
+// Package server is the HTTP API: GET /health, public GET /stats, and POST /sync (see README).
 package server
 
 import (
@@ -29,13 +29,22 @@ type Server struct {
 	store      *store.Store
 	apiKeyHash [32]byte
 	log        *slog.Logger
+	now        func() time.Time
+	location   *time.Location // defines "today" for the stats
+	statsCache statsCache
 }
 
-// New returns the HTTP handler. apiKey is the pre-shared secret clients send as a bearer token.
-func New(st *store.Store, apiKey string, log *slog.Logger) http.Handler {
-	s := &Server{store: st, apiKeyHash: sha256.Sum256([]byte(apiKey)), log: log}
+// New returns the HTTP handler. apiKey is the pre-shared secret clients send as a bearer token;
+// location is the time zone that decides which day is "today" for the stats.
+func New(st *store.Store, apiKey string, location *time.Location, log *slog.Logger) http.Handler {
+	return newServer(st, apiKey, location, log, time.Now)
+}
+
+func newServer(st *store.Store, apiKey string, location *time.Location, log *slog.Logger, now func() time.Time) http.Handler {
+	s := &Server{store: st, apiKeyHash: sha256.Sum256([]byte(apiKey)), log: log, now: now, location: location}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /stats", s.handleStats)
 	mux.Handle("POST /sync", s.requireAPIKey(http.HandlerFunc(s.handleSync)))
 	return s.logRequests(mux)
 }

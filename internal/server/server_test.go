@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"nscramble-server/internal/store"
 )
@@ -25,7 +26,7 @@ func newTestServer(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return New(st, testKey, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return New(st, testKey, time.UTC, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func solve(n int, edit ...func(map[string]any)) map[string]any {
@@ -64,7 +65,7 @@ func call(t *testing.T, h http.Handler, body any, key string) (int, syncResponse
 	return rec.Code, resp
 }
 
-func sync(t *testing.T, h http.Handler, since int64, changes ...map[string]any) syncResponse {
+func doSync(t *testing.T, h http.Handler, since int64, changes ...map[string]any) syncResponse {
 	t.Helper()
 	if changes == nil {
 		changes = []map[string]any{}
@@ -115,14 +116,14 @@ func TestHealthNeedsNoKey(t *testing.T) {
 
 func TestPushThenPullFromAnotherDevice(t *testing.T) {
 	h := newTestServer(t)
-	if got := sync(t, h, 0, solve(1), solve(2)); got.Rev != 2 {
+	if got := doSync(t, h, 0, solve(1), solve(2)); got.Rev != 2 {
 		t.Fatalf("rev after push = %d, want 2", got.Rev)
 	}
-	other := sync(t, h, 0)
+	other := doSync(t, h, 0)
 	if !reflect.DeepEqual(normalize(other.Changes), normalize([]any{solve(1), solve(2)})) || other.More {
 		t.Fatalf("pull = %+v", other)
 	}
-	if again := sync(t, h, other.Rev); again.Rev != 2 || len(again.Changes) != 0 {
+	if again := doSync(t, h, other.Rev); again.Rev != 2 || len(again.Changes) != 0 {
 		t.Fatalf("nothing new = %+v", again)
 	}
 }
@@ -130,11 +131,11 @@ func TestPushThenPullFromAnotherDevice(t *testing.T) {
 func TestNewerEditWinsOlderIsIgnored(t *testing.T) {
 	h := newTestServer(t)
 	base := solve(1)["updated_at"].(int)
-	sync(t, h, 0, solve(1))
-	sync(t, h, 0, solve(1, func(s map[string]any) { s["penalty"] = 2; s["updated_at"] = base + 100 }))
-	sync(t, h, 0, solve(1, func(s map[string]any) { s["penalty"] = 1; s["updated_at"] = base + 50 }))
+	doSync(t, h, 0, solve(1))
+	doSync(t, h, 0, solve(1, func(s map[string]any) { s["penalty"] = 2; s["updated_at"] = base + 100 }))
+	doSync(t, h, 0, solve(1, func(s map[string]any) { s["penalty"] = 1; s["updated_at"] = base + 50 }))
 
-	got := sync(t, h, 0)
+	got := doSync(t, h, 0)
 	if len(got.Changes) != 1 || got.Changes[0]["penalty"] != float64(2) {
 		t.Fatalf("got %+v", got.Changes)
 	}
@@ -142,15 +143,15 @@ func TestNewerEditWinsOlderIsIgnored(t *testing.T) {
 
 func TestAcceptedEditGetsNewRevisionRejectedDoesNot(t *testing.T) {
 	h := newTestServer(t)
-	sync(t, h, 0, solve(1), solve(2))
-	edited := sync(t, h, 2, solve(1, func(s map[string]any) {
+	doSync(t, h, 0, solve(1), solve(2))
+	edited := doSync(t, h, 2, solve(1, func(s map[string]any) {
 		s["deleted_at"] = 5
 		s["updated_at"] = s["updated_at"].(int) + 1
 	}))
 	if edited.Rev != 3 || !reflect.DeepEqual(ids(edited.Changes), []string{solve(1)["id"].(string)}) {
 		t.Fatalf("edited = %+v", edited)
 	}
-	if stale := sync(t, h, 3, solve(2)); stale.Rev != 3 || len(stale.Changes) != 0 {
+	if stale := doSync(t, h, 3, solve(2)); stale.Rev != 3 || len(stale.Changes) != 0 {
 		t.Fatalf("stale = %+v", stale)
 	}
 }
@@ -161,14 +162,14 @@ func TestPagesLargePulls(t *testing.T) {
 	for i := 1; i <= PageSize+20; i++ {
 		all = append(all, solve(i))
 	}
-	sync(t, h, 0, all[:MaxPush]...)
-	sync(t, h, 0, all[MaxPush:]...)
+	doSync(t, h, 0, all[:MaxPush]...)
+	doSync(t, h, 0, all[MaxPush:]...)
 
-	first := sync(t, h, 0)
+	first := doSync(t, h, 0)
 	if len(first.Changes) != PageSize || !first.More {
 		t.Fatalf("first page: %d changes, more=%v", len(first.Changes), first.More)
 	}
-	second := sync(t, h, first.Rev)
+	second := doSync(t, h, first.Rev)
 	if len(second.Changes) != 20 || second.More {
 		t.Fatalf("second page: %d changes, more=%v", len(second.Changes), second.More)
 	}
@@ -176,7 +177,7 @@ func TestPagesLargePulls(t *testing.T) {
 
 func TestMissingDeletedAtMeansNotDeleted(t *testing.T) {
 	h := newTestServer(t)
-	got := sync(t, h, 0, solve(1, func(s map[string]any) { delete(s, "deleted_at") }))
+	got := doSync(t, h, 0, solve(1, func(s map[string]any) { delete(s, "deleted_at") }))
 	if len(got.Changes) != 1 || got.Changes[0]["deleted_at"] != nil {
 		t.Fatalf("got %+v", got.Changes)
 	}
@@ -212,7 +213,7 @@ func TestRejectsInvalidInput(t *testing.T) {
 func TestBatchWithInvalidSolveStoresNothing(t *testing.T) {
 	h := newTestServer(t)
 	call(t, h, map[string]any{"since": 0, "changes": []any{solve(1), solve(2, func(s map[string]any) { s["time_ms"] = -5 })}}, testKey)
-	if got := sync(t, h, 0); len(got.Changes) != 0 {
+	if got := doSync(t, h, 0); len(got.Changes) != 0 {
 		t.Fatalf("stored %d solves", len(got.Changes))
 	}
 }

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"nscramble-server/internal/stats"
+
 	_ "modernc.org/sqlite" // pure Go: no cgo, so the binary is fully static
 )
 
@@ -189,4 +191,37 @@ func (s *Store) Sync(ctx context.Context, since int64, changes []Solve, pageSize
 		return SyncResult{}, err
 	}
 	return result, tx.Commit()
+}
+
+// Day is one calendar day's non-deleted solves, oldest first.
+type Day struct {
+	Date    string
+	Results []stats.Result
+}
+
+// RecentDays returns the last n dates that have non-deleted solves, oldest first.
+func (s *Store) RecentDays(ctx context.Context, n int) ([]Day, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT date, time_ms, penalty FROM solves
+		WHERE deleted_at IS NULL AND date IN (
+			SELECT DISTINCT date FROM solves WHERE deleted_at IS NULL ORDER BY date DESC LIMIT ?
+		)
+		ORDER BY date, created_at`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var days []Day
+	for rows.Next() {
+		var date string
+		var r stats.Result
+		if err := rows.Scan(&date, &r.TimeMs, &r.Penalty); err != nil {
+			return nil, err
+		}
+		if len(days) == 0 || days[len(days)-1].Date != date {
+			days = append(days, Day{Date: date})
+		}
+		days[len(days)-1].Results = append(days[len(days)-1].Results, r)
+	}
+	return days, rows.Err()
 }

@@ -9,6 +9,7 @@ Sync server for the nscramble apps (macOS, iPadOS): one Go binary, one SQLite fi
 | `NSCRAMBLE_API_KEY` | —                       | Required, ≥ 16 characters. Generate with `openssl rand -base64 32`. |
 | `NSCRAMBLE_DB`      | `data/nscramble.sqlite` | `/data/nscramble.sqlite` in the image (a volume). |
 | `NSCRAMBLE_ADDR`    | `:8080`                 | |
+| `NSCRAMBLE_TZ`      | `UTC`                   | IANA time zone that decides which day is "today" for `/stats`, e.g. `Europe/Budapest`. |
 
 The server speaks plain HTTP; put it behind a TLS-terminating reverse proxy (the apps require `https://`).
 Logs are JSON on stdout.
@@ -16,6 +17,23 @@ Logs are JSON on stdout.
 ## API
 
 - `GET /health` → `{"ok": true}` (no key needed).
+- `GET /stats` → public statistics for a website (no key; CORS `*`; cached in memory for 60 s):
+
+  ```json
+  {
+    "generated_at": "2026-09-27T10:00:00Z",
+    "recent_session": { "date": "2026-09-26", "solves": 42, "average_ms": 17370, "median_ms": 17200, "std_dev_ms": 2310 },
+    "average_history": [ { "date": "2026-08-30", "average_ms": 18120 }, … ],
+    "solve_count_history": [ { "date": "2026-08-30", "solves": 35 }, … ]
+  }
+  ```
+
+  The recent session is the latest date with solves **before today** (in `NSCRAMBLE_TZ`), since today's
+  session may still be in progress; it's `null` if there is none. The histories cover the last 30 dates with
+  solves, including today, oldest first. Times are milliseconds: the average drops the fastest and slowest 5% (at least one each,
+  DNF counting as slowest) and is rounded to 10 ms, like the app; the median counts DNFs as slowest; the
+  standard deviation (population) uses the non-DNF times. `null` means a DNF result or too few solves.
+  Dates are the solving device's local calendar days. Deleted solves are ignored.
 - `POST /sync` with `Authorization: Bearer <key>` and `{"since": <rev>, "changes": [solve…]}` →
   `{"rev": <rev>, "more": <bool>, "changes": [solve…]}`.
 
@@ -41,7 +59,8 @@ just docker-run
 
 ```sh
 docker run -d --name nscramble-server --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 -e NSCRAMBLE_API_KEY=… -v nscramble-data:/data nscramble-server
+  -p 127.0.0.1:8080:8080 -e NSCRAMBLE_API_KEY=… -e NSCRAMBLE_TZ=Europe/Budapest \
+  -v nscramble-data:/data nscramble-server
 ```
 
 Back up by copying `nscramble.sqlite` (plus `-wal`/`-shm` if present) from the volume, or with
