@@ -59,12 +59,19 @@ just docker-build  # image "nscramble-server" for linux/amd64
 just docker-run
 ```
 
+## CI and releases
+
+GitHub Actions (`.github/workflows/`): every push and pull request runs `gofmt`, `go vet` and the tests.
+Pushing a version tag (`1.2.3` or `v1.2.3`) runs the tests and publishes a multi-arch image
+(linux/amd64, linux/arm64) to `ghcr.io/<owner>/nscramble-server` tagged `1.2.3`, `1.2`, `1` and `latest`.
+The version is built into the binary and logged at startup.
+
 ## Deploying
 
 ```sh
 docker run -d --name nscramble-server --restart unless-stopped \
   -p 127.0.0.1:8080:8080 -e NSCRAMBLE_API_KEY=… -e NSCRAMBLE_TZ=Europe/Budapest \
-  -v nscramble-data:/data nscramble-server
+  -v nscramble-data:/data ghcr.io/nxu/nscramble-server:latest
 ```
 
 Back up by copying `nscramble.sqlite` (plus `-wal`/`-shm` if present) from the volume, or with

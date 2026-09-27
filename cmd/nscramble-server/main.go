@@ -32,6 +32,9 @@ import (
 
 const minAPIKeyLength = 16
 
+// version is set at build time: -ldflags "-X main.version=1.2.3".
+var version = "dev"
+
 func main() {
 	addr := getenv("NSCRAMBLE_ADDR", ":8080")
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
@@ -82,7 +85,7 @@ func run(log *slog.Logger, addr string) error {
 	}
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", addr, "db", dbPath, "tz", location.String())
+		log.Info("listening", "version", version, "addr", addr, "db", dbPath, "tz", location.String())
 		errc <- srv.ListenAndServe()
 	}()
 
