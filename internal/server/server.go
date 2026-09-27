@@ -31,17 +31,32 @@ type Server struct {
 	log        *slog.Logger
 	now        func() time.Time
 	location   *time.Location // defines "today" for the stats
+	options    Options
+	limiter    authLimiter
 	statsCache statsCache
 }
 
-// New returns the HTTP handler. apiKey is the pre-shared secret clients send as a bearer token;
-// location is the time zone that decides which day is "today" for the stats.
-func New(st *store.Store, apiKey string, location *time.Location, log *slog.Logger) http.Handler {
-	return newServer(st, apiKey, location, log, time.Now)
+// Options configures the server.
+type Options struct {
+	// APIKey is the pre-shared secret clients send as a bearer token.
+	APIKey string
+	// Location is the time zone that decides which day is "today" for the stats.
+	Location *time.Location
+	// BehindProxy takes the client address from X-Forwarded-For (for rate limiting). Only enable it
+	// behind a reverse proxy that sets that header, or clients could pick their own address.
+	BehindProxy bool
 }
 
-func newServer(st *store.Store, apiKey string, location *time.Location, log *slog.Logger, now func() time.Time) http.Handler {
-	s := &Server{store: st, apiKeyHash: sha256.Sum256([]byte(apiKey)), log: log, now: now, location: location}
+// New returns the HTTP handler.
+func New(st *store.Store, opts Options, log *slog.Logger) http.Handler {
+	return newServer(st, opts, log, time.Now)
+}
+
+func newServer(st *store.Store, opts Options, log *slog.Logger, now func() time.Time) http.Handler {
+	s := &Server{
+		store: st, apiKeyHash: sha256.Sum256([]byte(opts.APIKey)), log: log, now: now,
+		location: opts.Location, options: opts, limiter: authLimiter{clients: map[string]*authFailures{}},
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /stats", s.handleStats)
@@ -57,15 +72,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// requireAPIKey checks the bearer token. Clients with too many recent failures are refused (429)
+// without checking the key at all, so a blocked client can't keep guessing.
 func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := clientIP(r, s.options.BehindProxy)
+		if blocked, retryAfter := s.limiter.blocked(ip, s.now()); blocked {
+			w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
+			writeError(w, http.StatusTooManyRequests, "too many failed attempts")
+			return
+		}
 		key, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		// Compare hashes so the comparison takes the same time whatever the key's length.
 		given := sha256.Sum256([]byte(key))
 		if !ok || subtle.ConstantTimeCompare(given[:], s.apiKeyHash[:]) != 1 {
+			if s.limiter.fail(ip, s.now()) {
+				s.log.Warn("blocking client after failed API key attempts", "ip", ip, "for", authBlockDuration.String())
+			}
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		s.limiter.succeed(ip)
 		next.ServeHTTP(w, r)
 	})
 }

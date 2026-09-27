@@ -6,6 +6,8 @@
 //	NSCRAMBLE_DB       SQLite database path (default data/nscramble.sqlite)
 //	NSCRAMBLE_ADDR     listen address (default :8080)
 //	NSCRAMBLE_TZ       IANA time zone that decides "today" for /stats, e.g. Europe/Budapest (default UTC)
+//	NSCRAMBLE_BEHIND_PROXY  "true" to take client IPs from X-Forwarded-For (for rate limiting);
+//	                        only behind a reverse proxy that sets it
 //
 // "nscramble-server healthcheck" exits 0 if the server on NSCRAMBLE_ADDR answers /health (for Docker).
 package main
@@ -67,8 +69,12 @@ func run(log *slog.Logger, addr string) error {
 	defer st.Close()
 
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           server.New(st, apiKey, location, log),
+		Addr: addr,
+		Handler: server.New(st, server.Options{
+			APIKey:      apiKey,
+			Location:    location,
+			BehindProxy: os.Getenv("NSCRAMBLE_BEHIND_PROXY") == "true",
+		}, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

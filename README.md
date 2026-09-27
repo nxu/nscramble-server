@@ -10,6 +10,7 @@ Sync server for the nscramble apps (macOS, iPadOS): one Go binary, one SQLite fi
 | `NSCRAMBLE_DB`      | `data/nscramble.sqlite` | `/data/nscramble.sqlite` in the image (a volume). |
 | `NSCRAMBLE_ADDR`    | `:8080`                 | |
 | `NSCRAMBLE_TZ`      | `UTC`                   | IANA time zone that decides which day is "today" for `/stats`, e.g. `Europe/Budapest`. |
+| `NSCRAMBLE_BEHIND_PROXY` | unset              | `true` to take client IPs from `X-Forwarded-For` for rate limiting. Set it behind a reverse proxy (otherwise every client shares the proxy's address); never without one, or clients could pick their own address. |
 
 The server speaks plain HTTP; put it behind a TLS-terminating reverse proxy (the apps require `https://`).
 Logs are JSON on stdout.
@@ -34,6 +35,9 @@ Logs are JSON on stdout.
   DNF counting as slowest) and is rounded to 10 ms, like the app; the median counts DNFs as slowest; the
   standard deviation (population) uses the non-DNF times. `null` means a DNF result or too few solves.
   Dates are the solving device's local calendar days. Deleted solves are ignored.
+- Failed API-key attempts are rate limited per client IP: after 5 within 15 minutes, that client gets
+  `429 Too Many Requests` (with `Retry-After`) for 15 minutes, even with the right key. A successful
+  request clears the count. Limits are in memory and reset on restart.
 - `POST /sync` with `Authorization: Bearer <key>` and `{"since": <rev>, "changes": [solve…]}` →
   `{"rev": <rev>, "more": <bool>, "changes": [solve…]}`.
 

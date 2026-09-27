@@ -26,7 +26,7 @@ func newStatsServer(t *testing.T) (http.Handler, *clock) {
 	}
 	t.Cleanup(func() { st.Close() })
 	c := &clock{t: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}
-	return newServer(st, testKey, time.UTC, slog.New(slog.NewTextHandler(io.Discard, nil)), c.now), c
+	return newServer(st, Options{APIKey: testKey, Location: time.UTC}, slog.New(slog.NewTextHandler(io.Discard, nil)), c.now), c
 }
 
 func getStats(t *testing.T, h http.Handler) (statsResponse, *httptest.ResponseRecorder) {
@@ -178,7 +178,7 @@ func TestRecentSessionSkipsToday(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.t = time.Date(2026, 9, 27, 23, 30, 0, 0, time.UTC)
-	h3 := newServer(st, testKey, budapest, slog.New(slog.NewTextHandler(io.Discard, nil)), c.now)
+	h3 := newServer(st, Options{APIKey: testKey, Location: budapest}, slog.New(slog.NewTextHandler(io.Discard, nil)), c.now)
 	doSync(t, h3, 0, solveOn(4, "2026-09-27", 20_000, 0))
 	if resp, _ := getStats(t, h3); resp.RecentSession == nil || resp.RecentSession.Date != "2026-09-27" {
 		t.Fatalf("recent session = %+v", resp.RecentSession)

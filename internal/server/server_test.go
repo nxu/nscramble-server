@@ -26,7 +26,7 @@ func newTestServer(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return New(st, testKey, time.UTC, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return New(st, Options{APIKey: testKey, Location: time.UTC}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func solve(n int, edit ...func(map[string]any)) map[string]any {
